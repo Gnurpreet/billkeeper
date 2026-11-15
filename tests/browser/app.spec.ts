@@ -1,5 +1,9 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
+test.beforeEach(async ({ page }) => {
+  await page.route('https://fonts.googleapis.com/**', route => route.abort());
+  await page.route('https://fonts.gstatic.com/**', route => route.abort());
+});
 const password = 'billkeeper-test-password';
 async function signup(api: APIRequestContext) { const email = `${randomUUID()}@example.com`; const response = await api.post('/api/action', { data: { action: 'signup', email, password } }); expect(response.ok()).toBeTruthy(); return email; }
 const receipt = () => ({ action: 'saveReceipt', id: randomUUID(), vendor: 'Test Cafe', date: '2026-11-12', category: 'meals', currency: 'INR', amount: '120.50', summary: 'Lunch' });
@@ -35,15 +39,35 @@ test('ownership, duplicate saves, private documents, locked reports, CSV and log
   } finally { await a.dispose(); await b.dispose(); }
 });
 
-for (const width of [390, 1440]) test(`complete manual workflow at ${width}px`, async ({ page }) => {
-  await page.setViewportSize({ width, height: 900 });
+for (const width of [320, 390, 768, 1440]) test(`complete manual workflow at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: width === 320 ? 640 : 900 });
   const email = `${randomUUID()}@example.com`;
   await page.goto('/'); await page.getByRole('button', { name: 'New here? Create an account' }).click();
   await page.getByLabel('Email address').fill(email); await page.getByLabel('Password', { exact: true }).fill(password); await page.getByRole('button', { name: 'Create account', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Keep the receipt.' })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
+  const mobileNavigation = page.getByRole('navigation', { name: 'Mobile navigation', exact: true });
+  if (width < 1024) {
+    await expect(mobileNavigation).toBeVisible();
+    for (const button of await mobileNavigation.getByRole('button').all()) {
+      const bounds = await button.boundingBox();
+      expect(bounds!.width).toBeGreaterThanOrEqual(44);
+      expect(bounds!.height).toBeGreaterThanOrEqual(44);
+    }
+    const photo = await page.getByRole('button', { name: 'Take a photo' }).boundingBox();
+    expect(photo!.y + photo!.height).toBeLessThan(640);
+    expect(await page.locator('.capture-layout').evaluate(el => getComputedStyle(el).gridTemplateColumns.split(' ').length)).toBe(width < 600 ? 1 : 2);
+  } else await expect(mobileNavigation).toBeHidden();
+  await page.screenshot({ path: `test-results/capture-${width}.png`, fullPage: true });
   await page.getByRole('button', { name: 'Add manually' }).click();
+  if (width < 600) {
+    await expect(page.locator('.document-panel')).toBeHidden();
+    expect(await page.getByLabel('Original amount').evaluate(el => getComputedStyle(el).fontSize)).toBe('16px');
+    expect(await page.locator('.form-grid').evaluate(el => getComputedStyle(el).gridTemplateColumns.split(' ').length)).toBe(1);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
   await page.getByLabel('Merchant', { exact: true }).fill('Desktop & mobile cafe');
-  await page.getByLabel('Receipt date').fill('2026-11-12'); await page.getByLabel('Category', { exact: true }).selectOption('meals'); await page.getByLabel('Original amount').fill('250.25');
+  await page.getByLabel('Receipt date').fill('2026-11-12'); await page.getByRole('combobox', { name: 'Category', exact: true }).selectOption('meals'); await page.getByLabel('Original amount').fill('250.25');
   await page.getByRole('button', { name: 'Save to draft' }).click();
   await expect(page.getByRole('heading', { name: 'Your open draft.' })).toBeVisible(); await expect(page.getByText('Desktop & mobile cafe')).toBeVisible();
   await page.getByRole('button', { name: 'Edit Desktop & mobile cafe' }).click(); await page.getByLabel('Original amount').fill('300.25'); await page.getByRole('button', { name: 'Save to draft' }).click();
@@ -55,9 +79,10 @@ for (const width of [390, 1440]) test(`complete manual workflow at ${width}px`, 
   await page.screenshot({ path: `test-results/report-${width}.png`, fullPage: true });
   await page.getByRole('button', { name: 'Delete report and its receipts' }).click(); await page.getByRole('button', { name: 'Delete permanently' }).click();
   await expect(page.getByRole('heading', { name: 'A home for finished reports.' })).toBeVisible();
-  await page.getByRole('navigation', { name: width < 800 ? 'Mobile navigation' : 'Main navigation', exact: true }).getByRole('button', { name: 'Settings' }).click();
+  await page.getByRole('navigation', { name: width < 1024 ? 'Mobile navigation' : 'Main navigation', exact: true }).getByRole('button', { name: 'Settings' }).click();
   await expect(page.getByRole('heading', { name: 'Currency rates', exact: true })).toBeVisible();
   await expect(page.getByText('Last successful fetch:', { exact: false })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
   for (const currency of ['USD','AED','GBP','EUR']) await expect(page.locator('.currency-rates dt').getByText(currency, { exact: true })).toBeVisible();
 });
 
@@ -68,7 +93,7 @@ test('PWA manifest, service worker, offline fallback and production file upload'
   await page.reload();
   await page.getByLabel('Upload receipt documents').setInputFiles({ name: 'test.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1sAAAAASUVORK5CYII=', 'base64') });
   await expect(page.getByText('AI scanning is not configured. Enter the receipt details below.')).toBeVisible();
-  await page.getByLabel('Merchant', { exact: true }).fill('Photo test'); await page.getByLabel('Receipt date').fill('2026-11-12'); await page.getByLabel('Category', { exact: true }).selectOption('meals'); await page.getByLabel('Original amount').fill('10'); await page.getByRole('button', { name: 'Save to draft' }).click();
+  await page.getByLabel('Merchant', { exact: true }).fill('Photo test'); await page.getByLabel('Receipt date').fill('2026-11-12'); await page.getByRole('combobox', { name: 'Category', exact: true }).selectOption('meals'); await page.getByLabel('Original amount').fill('10'); await page.getByRole('button', { name: 'Save to draft' }).click();
   await expect(page.getByText('Photo test')).toBeVisible();
   await page.context().setOffline(true); await page.reload(); await expect(page.getByRole('heading', { name: /A little pause/ })).toBeVisible();
 });
